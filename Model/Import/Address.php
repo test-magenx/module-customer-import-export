@@ -645,7 +645,7 @@ class Address extends AbstractCustomer
                 $value = $rowData[$attributeAlias];
 
                 if (!strlen($rowData[$attributeAlias])) {
-                    if ($attributeParams['is_required']) {
+                    if (!$newAddress) {
                         continue;
                     }
 

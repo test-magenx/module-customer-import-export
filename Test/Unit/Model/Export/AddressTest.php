@@ -7,7 +7,10 @@ declare(strict_types=1);
 
 namespace Magento\CustomerImportExport\Test\Unit\Model\Export;
 
-use Magento\Customer\Model\ResourceModel\Customer\Collection as CustomerCollection;
+use Magento\Customer\Model\AddressFactory;
+use Magento\Customer\Model\Config\Share;
+use Magento\Customer\Model\GroupFactory;
+use Magento\Customer\Model\ResourceModel\Customer;
 use Magento\Customer\Model\ResourceModel\Customer\CollectionFactory;
 use Magento\CustomerImportExport\Model\Export\Address;
 use Magento\CustomerImportExport\Model\Export\CustomerFactory;
@@ -16,10 +19,9 @@ use Magento\Eav\Model\Entity\Attribute\AbstractAttribute;
 use Magento\Eav\Model\Entity\TypeFactory;
 use Magento\Framework\App\Config\ScopeConfigInterface;
 use Magento\Framework\Data\Collection;
+use Magento\Framework\Data\Collection\AbstractDb;
 use Magento\Framework\Data\Collection\EntityFactory;
 use Magento\Framework\DataObject;
-use Magento\Framework\DB\Adapter\AdapterInterface;
-use Magento\Framework\DB\Select;
 use Magento\Framework\Model\AbstractModel;
 use Magento\Framework\Stdlib\DateTime\TimezoneInterface;
 use Magento\Framework\TestFramework\Unit\Helper\ObjectManager;
@@ -28,6 +30,7 @@ use Magento\ImportExport\Model\Export\Factory;
 use Magento\ImportExport\Model\ResourceModel\CollectionByPagesIteratorFactory;
 use Magento\Store\Model\Store;
 use Magento\Store\Model\StoreManager;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -79,7 +82,7 @@ class AddressTest extends TestCase
     /**
      * ObjectManager helper
      *
-     * @var ObjectManager
+     * @var \Magento\Framework\TestFramework\Unit\Helper\ObjectManager
      */
     protected $_objectManager;
 
@@ -90,9 +93,6 @@ class AddressTest extends TestCase
      */
     protected $_model;
 
-    /**
-     * @inheritdoc
-     */
     protected function setUp(): void
     {
         $storeManager = $this->createMock(StoreManager::class);
@@ -119,9 +119,6 @@ class AddressTest extends TestCase
         );
     }
 
-    /**
-     * @inheritdoc
-     */
     protected function tearDown(): void
     {
         unset($this->_model);
@@ -135,9 +132,8 @@ class AddressTest extends TestCase
      */
     protected function _getModelDependencies()
     {
-        $pageSize = 1;
-
         $translator = $this->createMock(\stdClass::class);
+
         $entityFactory = $this->createMock(EntityFactory::class);
 
         /** @var Collection|TestCase $attributeCollection */
@@ -171,35 +167,34 @@ class AddressTest extends TestCase
             $attributeCollection->addItem($attribute);
         }
 
-        $connection = $this->createMock(AdapterInterface::class);
-        $customerCollection = $this->createMock(CustomerCollection::class);
-        $customerCollection->method('getConnection')->willReturn($connection);
-        $customerCollection->expects($this->once())->method('setPageSize')->with($pageSize);
-        $customerCollection->method('getLastPageNumber')->willReturn(1);
-        $allIdsSelect = $this->createMock(Select::class);
-        $customerCollection->method('getAllIdsSql')->willReturn($allIdsSelect);
+        $byPagesIterator = $this->getMockBuilder(\stdClass::class)->addMethods(['iterate'])
+            ->disableOriginalConstructor()
+            ->getMock();
+        $byPagesIterator->expects(
+            $this->once()
+        )->method(
+            'iterate'
+        )->willReturnCallback(
+            [$this, 'iterate']
+        );
 
-        $customerSelect = $this->createMock(Select::class);
-        $customerSelect->method('from')->willReturnSelf();
-        $customerSelect->expects($this->once())
-            ->method('where')
-            ->with('customer.entity_id IN (?)', $allIdsSelect)
-            ->willReturnSelf();
-        $customerSelect->expects($this->once())->method('limitPage')->with(1, $pageSize);
-        $connection->method('select')->willReturn($customerSelect);
-        $connection->method('fetchAssoc')->with($customerSelect)->willReturn([1 => $this->_customerData]);
+        $customerCollection = $this->getMockBuilder(AbstractDb::class)
+            ->setMethods(['addAttributeToSelect'])
+            ->disableOriginalConstructor()
+            ->getMockForAbstractClass();
 
         $customerEntity = $this->getMockBuilder(\stdClass::class)
             ->addMethods(['filterEntityCollection', 'setParameters'])
             ->disableOriginalConstructor()
             ->getMock();
-        $customerEntity->method('filterEntityCollection')->willReturnArgument(0);
-        $customerEntity->method('setParameters')->willReturnSelf();
+        $customerEntity->expects($this->any())->method('filterEntityCollection')->willReturnArgument(0);
+        $customerEntity->expects($this->any())->method('setParameters')->willReturnSelf();
 
         $data = [
             'translator' => $translator,
             'attribute_collection' => $attributeCollection,
-            'page_size' => $pageSize,
+            'page_size' => 1,
+            'collection_by_pages_iterator' => $byPagesIterator,
             'entity_type_id' => 1,
             'customer_collection' => $customerCollection,
             'customer_entity' => $customerEntity,
@@ -231,6 +226,36 @@ class AddressTest extends TestCase
         }
 
         return $websites;
+    }
+
+    /**
+     * Iterate stub
+     *
+     * @SuppressWarnings(PHPMD.UnusedFormalParameter)
+     *
+     * @param AbstractDb $collection
+     * @param int $pageSize
+     * @param array $callbacks
+     */
+    public function iterate(AbstractDb $collection, $pageSize, array $callbacks)
+    {
+        $resource = $this->createPartialMock(Customer::class, ['getIdFieldName']);
+        $resource->expects($this->any())->method('getIdFieldName')->willReturn('id');
+        $arguments = [
+            'data' => $this->_customerData,
+            'resource' => $resource,
+            $this->createMock(Share::class),
+            $this->createMock(AddressFactory::class),
+            $this->createMock(\Magento\Customer\Model\ResourceModel\Address\CollectionFactory::class),
+            $this->createMock(GroupFactory::class),
+            $this->createMock(\Magento\Customer\Model\AttributeFactory::class),
+        ];
+        /** @var $customer \Magento\Customer\Model\Customer|MockObject */
+        $customer = $this->_objectManager->getObject(\Magento\Customer\Model\Customer::class, $arguments);
+
+        foreach ($callbacks as $callback) {
+            call_user_func($callback, $customer);
+        }
     }
 
     /**
